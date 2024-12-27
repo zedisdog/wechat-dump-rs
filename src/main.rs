@@ -68,7 +68,7 @@ const RULES_V4: &str = r#"
     rule GetUserInfoOffset
     {
         strings:
-            $a = /(.{16}[\x00-\x20]\x00{7}(\x0f|\x1f)\x00{7}){2}.{16}[\x01-\x20]\x00{7}(\x0f|\x1f)\x00{7}[0-9]{11}\x00{5}\x0b\x00{7}\x0f\x00{7}.{25}\x00{7}(\x2f|\x1f|\x0f)\x00{7}/
+            $a = /(.{16}[\x00-\x20]\x00{7}(\x0f|\x1f)\x00{7}){2}.{16}[\x01-\x20]\x00{7}(\x0f|\x1f)\x00{7}[0-9]{11}\x00{5}\x0b\x00{7}\x0f\x00{7}.{25}\x00{7}(\x2f|\x1f|\x0f)\x00{7}/s
         condition:
             $a
     }
@@ -195,7 +195,12 @@ fn read_string(pid: u32, addr: usize, size: usize) -> Result<String> {
         };
 
         if buf_str.len() != size {
-            Err(anyhow::anyhow!(format!("except {} characters, but found: {} --> {}", size, buf_str.len(), buf_str)))
+            Err(anyhow::anyhow!(format!(
+                "except {} characters, but found: {} --> {}",
+                size,
+                buf_str.len(),
+                buf_str
+            )))
         } else {
             Ok(buf_str)
         }
@@ -528,18 +533,26 @@ fn dump_wechat_info_v4(
     // let key_search_range = 0..key_memory_info.base + key_memory_info.region_size;
 
     let user_info_address = user_info_match.base + user_info_match.offset;
-    let wxid_length = u64::from_le_bytes(user_info_match.data[0x10..0x10+0x8].try_into().unwrap());
-    let wxid = 
-        read_string_or_ptr(pid, user_info_address, wxid_length as usize).unwrap();
-    let account_name_length = u64::from_le_bytes(user_info_match.data[0x30..0x30+0x8].try_into().unwrap());
+    let wxid_length =
+        u64::from_le_bytes(user_info_match.data[0x10..0x10 + 0x8].try_into().unwrap());
+    let wxid = read_string_or_ptr(pid, user_info_address, wxid_length as usize).unwrap();
+    let account_name_length =
+        u64::from_le_bytes(user_info_match.data[0x30..0x30 + 0x8].try_into().unwrap());
     let mut account_name =
         read_string_or_ptr(pid, user_info_address + 0x20, account_name_length as usize).unwrap();
-    let nick_name_length = u64::from_le_bytes(user_info_match.data[0x50..0x50+0x8].try_into().unwrap());
+    let nick_name_length =
+        u64::from_le_bytes(user_info_match.data[0x50..0x50 + 0x8].try_into().unwrap());
     let nick_name =
         read_string_or_ptr(pid, user_info_address + 0x40, nick_name_length as usize).unwrap();
-    let phone_length = u64::from_le_bytes(user_info_match.data[0x70..0x70+0x8].try_into().unwrap());
-    let phone_str = read_string_or_ptr(pid, user_info_address + 0x60, phone_length as usize).unwrap();
-    println!("[+] found user info at 0x{:x} --> {}********", user_info_address, &phone_str[..3]);
+    let phone_length =
+        u64::from_le_bytes(user_info_match.data[0x70..0x70 + 0x8].try_into().unwrap());
+    let phone_str =
+        read_string_or_ptr(pid, user_info_address + 0x60, phone_length as usize).unwrap();
+    println!(
+        "[+] found user info at 0x{:x} --> {}********",
+        user_info_address,
+        &phone_str[..3]
+    );
 
     // non account name
     if account_name.is_empty() {
@@ -695,7 +708,8 @@ rule GetKeyAddrStub
                 cur_key_offset
             ));
             if key_bytes.iter().filter(|&&x| x.is_ascii_alphanumeric()).count() < 20    // limit number of including ascii alphanumeric
-                && key_bytes.iter().filter(|&&x| x == 0).count() < 10  // limit number of including zero
+                && key_bytes.iter().filter(|&&x| x == 0).count() < 10
+            // limit number of including zero
             {
                 // 验证 key 是否有效
                 let start = SALT_SIZE;
@@ -864,7 +878,7 @@ fn decrypt_db_file_v3(path: &PathBuf, pkey: &String) -> Result<Vec<u8>> {
         };
 
         // 每页大小4096，分别解密
-        let total_page = (buf.len() as f64 / PAGE_SIZE as f64).ceil() as usize;
+        let total_page = buf.len() / PAGE_SIZE;
         for cur_page in 0..total_page {
             let offset = if cur_page == 0 { SALT_SIZE } else { 0 };
             let start: usize = cur_page * PAGE_SIZE;
@@ -1027,11 +1041,8 @@ fn dump_all_by_pid(wechat_info: &WechatInfo, output: &PathBuf) {
     if output.is_file() {
         panic!("[!] the output path must be a directory");
     }
-    let output_dir = PathBuf::from(format!(
-        "{}\\wechat_{}",
-        output.to_str().unwrap(),
-        wechat_info.pid
-    ));
+    let mut output_dir = output.components().collect::<PathBuf>();
+    output_dir.push(format!("wechat_{}", wechat_info.pid));
     if !output_dir.exists() {
         std::fs::create_dir_all(&output_dir).unwrap();
     }
@@ -1078,7 +1089,7 @@ fn cli() -> clap::Command {
     use clap::{arg, value_parser, Command};
 
     Command::new("wechat-dump-rs")
-        .version("1.0.25")
+        .version("1.0.27")
         .about("A wechat db dump tool")
         .author("REinject")
         .help_template("{name} ({version}) - {author}\n{about}\n{all-args}")
@@ -1132,6 +1143,9 @@ fn main() {
                 get_pid_by_name_and_cmd_pattern("Weixin.exe", r#"Weixin\.exe"?\s*$"#),
             ]
             .concat();
+            if pids.is_empty() {
+                panic!("WeChat is not running!!")
+            }
             for pid in pids {
                 let wechat_info = dump_wechat_info(pid, None);
 
